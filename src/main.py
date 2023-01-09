@@ -43,11 +43,10 @@ def generator_combination(probability, config):
     return generator
 
 
-def naive_bayes(generator):
-    r = next(generator)
+def naive_bayes(element):
     proba = []
     out = {}
-    for key, value in r.items():
+    for key, value in element.items():
         nv = float(value.split("_")[1])
         vk = value.split("_")[0]
         out[f"{key}"] = vk
@@ -68,7 +67,7 @@ if __name__ == "__main__":
     # 2 способ
     generator = generator_combination(probability, config)
     for element in generator:
-        result, proba = naive_bayes(generator)
+        result, proba = naive_bayes(element)
         if proba > 0.005:
             print(f"наивная байесовская модель \n {result}")
             print(proba)
