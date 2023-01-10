@@ -1,4 +1,5 @@
 import torch; torch.manual_seed(0)
+from sklearn.decomposition import PCA
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils
@@ -117,9 +118,11 @@ def plot_latent(autoencoder, data, num_batches=100):
     for i, (x, y) in enumerate(data):
         z = autoencoder.encoder(x.to(device))
         z = z.to('cpu').detach().numpy()
+        z = PCA(n_components=2).fit_transform(z)
         plt.scatter(z[:, 0], z[:, 1], c=y, cmap='tab10')
         if i > num_batches:
             plt.colorbar()
+            plt.savefig('vae_latent_space.png')
             break
 
 def interpolate(autoencoder, x_1, x_2, n=12):
@@ -129,25 +132,24 @@ def interpolate(autoencoder, x_1, x_2, n=12):
     interpolate_list = autoencoder.decoder(z)
     interpolate_list = interpolate_list.to('cpu').detach().numpy()
 
-    w = 28
+    w = 128
     img = np.zeros((w, n*w))
     for i, x_hat in enumerate(interpolate_list):
-        img[:, i*w:(i+1)*w] = x_hat.reshape(28, 28)
+        img[:, i*w:(i+1)*w] = x_hat.reshape(128, 128)
     plt.imshow(img)
     plt.xticks([])
     plt.yticks([])
 
 
 def interpolate_gif(autoencoder, filename, x_1, x_2, n=100):
-    z_1 = autoencoder.encoder(x_1)
-    z_2 = autoencoder.encoder(x_2)
+    z_1 = autoencoder.encoder(x_1.to(device))
+    z_2 = autoencoder.encoder(x_2.to(device))
 
     z = torch.stack([z_1 + (z_2 - z_1)*t for t in np.linspace(0, 1, n)])
 
-    interpolate_list = autoencoder.decoder(z)
+    interpolate_list = autoencoder.decoder(z.to(device))
     interpolate_list = interpolate_list.to('cpu').detach().numpy()*255
-
-    images_list = [Image.fromarray(img.reshape(28, 28)).resize((256, 256)) for img in interpolate_list]
+    images_list = [Image.fromarray(img.reshape(128, 128, 3).astype(np.uint8)).resize((256, 256)) for img in interpolate_list]
     images_list = images_list + images_list[::-1] # loop back beginning
 
     images_list[0].save(
@@ -174,9 +176,10 @@ def main():
     vae = VariationalAutoencoder(latent_dims).to(device) # GPU
     vae = VAE_train(vae, data, epochs=5)
 
-    x, y = next(iter(data)) # hack to grab a batch
-    x_1 = x[y == 3][0].to(device) # find a 1
-    x_2 = x[y == 7][0].to(device) # find a 0
+    plot_latent(vae, data, 100)
+
+    imgs = next(iter(data))[0]
+    interpolate_gif(vae, 'gif', imgs[0], imgs[1])
 
 if __name__ == '__main__':
     main()
