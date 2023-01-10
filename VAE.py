@@ -27,13 +27,24 @@ class Encoder(nn.Module):
 class Decoder(nn.Module):
     def __init__(self, latent_dims):
         super(Decoder, self).__init__()
-        self.linear1 = nn.Linear(latent_dims, 512)
-        self.linear2 = nn.Linear(512, 784)
+        self.conv1 = nn.Conv2d(32, 3, kernel_size=3, padding=1, bias=False)
+        self.conv2 = nn.Conv2d(64, 32, kernel_size=3, padding=1, bias=False)
+        self.conv3 = nn.Conv2d(128, 64, kernel_size=3, padding=1, bias=False)
+        self.conv4 = nn.Conv2d(256, 128, kernel_size=3, padding=1, bias=False)
+
+        self.up = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
 
     def forward(self, z):
-        z = F.relu(self.linear1(z))
-        z = torch.sigmoid(self.linear2(z))
-        return z.reshape((-1, 1, 28, 28))
+        z = z.view(-1, 1, 8, 8)
+        z = z.repeat(1, 256, 1, 1)
+
+        z = F.relu(self.up(self.conv4(z)))
+        z = F.relu(self.up(self.conv3(z)))
+        z = F.relu(self.up(self.conv2(z)))
+        z = F.relu(self.up(self.conv1(z)))
+
+        z = torch.sigmoid(z)
+        return z
 
 
 class Autoencoder(nn.Module):
@@ -50,9 +61,15 @@ class Autoencoder(nn.Module):
 class VariationalEncoder(nn.Module):
     def __init__(self, latent_dims):
         super(VariationalEncoder, self).__init__()
-        self.linear1 = nn.Linear(784, 512)
-        self.linear2 = nn.Linear(512, latent_dims)
-        self.linear3 = nn.Linear(512, latent_dims)
+        self.conv1 = nn.Conv2d(3, 32, kernel_size=3, padding=1, bias=False)
+        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1, bias=False)
+        self.conv3 = nn.Conv2d(64, 128, kernel_size=3, padding=1, bias=False)
+        self.conv4 = nn.Conv2d(128, 256, kernel_size=3, padding=1, bias=False)
+        self.conv1x1 = nn.Conv2d(256, 1, kernel_size=1, padding=1, bias=False)
+
+        self.linear1 = nn.Linear(100, latent_dims)
+        self.linear2 = nn.Linear(100, latent_dims)
+        self.pool = nn.MaxPool2d(2)
 
         self.N = torch.distributions.Normal(0, 1)
         self.N.loc = self.N.loc.cuda() # hack to get sampling on the GPU
@@ -60,10 +77,16 @@ class VariationalEncoder(nn.Module):
         self.kl = 0
 
     def forward(self, x):
+        x = F.relu(self.pool(self.conv1(x)))
+        x = F.relu(self.pool(self.conv2(x)))
+        x = F.relu(self.pool(self.conv3(x)))
+        x = F.relu(self.pool(self.conv4(x)))
+        x = F.relu(self.conv1x1(x))
+
+
         x = torch.flatten(x, start_dim=1)
-        x = F.relu(self.linear1(x))
-        mu =  self.linear2(x)
-        sigma = torch.exp(self.linear3(x))
+        mu =  self.linear1(x)
+        sigma = torch.exp(self.linear2(x))
         z = mu + sigma*self.N.sample(mu.shape)
         self.kl = (sigma**2 + mu**2 - torch.log(sigma) - 1/2).sum()
         return z
@@ -162,19 +185,18 @@ def interpolate_gif(autoencoder, filename, x_1, x_2, n=100):
         loop=1)
 
 def main():
-    latent_dims = 2
-    autoencoder = Autoencoder(latent_dims).to(device) # GPU
-
+    latent_dims = 64
+    transform = torchvision.transforms.Compose([
+        torchvision.transforms.Resize((128, 128)),
+        torchvision.transforms.ToTensor(),
+        torchvision.transforms.Normalize((0.48232,), (0.23051,))
+    ])
     data = torch.utils.data.DataLoader(
-            torchvision.datasets.MNIST('./data',
-                transform=torchvision.transforms.ToTensor(),
-                download=True),
+            torchvision.datasets.CelebA('./data',
+                transform=transform,
+                download=False),
             batch_size=128,
             shuffle=True)
-
-    autoencoder_1 = train(autoencoder, data, epochs=1)
-    autoencoder_5 = train(autoencoder, data, epochs=5)
-    autoencoder_10 = train(autoencoder, data, epochs=10)
 
     vae = VariationalAutoencoder(latent_dims).to(device) # GPU
     vae = VAE_train(vae, data)
@@ -182,3 +204,6 @@ def main():
     x, y = next(iter(data)) # hack to grab a batch
     x_1 = x[y == 3][0].to(device) # find a 1
     x_2 = x[y == 7][0].to(device) # find a 0
+
+if __name__ == '__main__':
+    main()
