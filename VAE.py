@@ -12,21 +12,12 @@ from PIL import Image
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-class Encoder(nn.Module):
-    def __init__(self, latent_dims):
-        super(Encoder, self).__init__()
-        self.linear1 = nn.Linear(784, 512)
-        self.linear2 = nn.Linear(512, latent_dims)
-
-    def forward(self, x):
-        x = torch.flatten(x, start_dim=1)
-        x = F.relu(self.linear1(x))
-        return self.linear2(x)
-
 
 class Decoder(nn.Module):
     def __init__(self, latent_dims):
         super(Decoder, self).__init__()
+        self.reshape_dim = int(latent_dims ** (0.5))
+        self.conv1x1 = nn.Conv2d(1, 256, kernel_size=1, padding=0, bias=False)
         self.conv1 = nn.Conv2d(32, 3, kernel_size=3, padding=1, bias=False)
         self.conv2 = nn.Conv2d(64, 32, kernel_size=3, padding=1, bias=False)
         self.conv3 = nn.Conv2d(128, 64, kernel_size=3, padding=1, bias=False)
@@ -34,10 +25,9 @@ class Decoder(nn.Module):
 
         self.up = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
 
-    def forward(self, z):
-        z = z.view(-1, 1, 8, 8)
-        z = z.repeat(1, 256, 1, 1)
-
+    def forward(self, z: torch.Tensor):
+        z = z.unflatten(1, (1, self.reshape_dim, self.reshape_dim))
+        z = F.relu(self.conv1x1(z))
         z = F.relu(self.up(self.conv4(z)))
         z = F.relu(self.up(self.conv3(z)))
         z = F.relu(self.up(self.conv2(z)))
@@ -45,17 +35,6 @@ class Decoder(nn.Module):
 
         z = torch.sigmoid(z)
         return z
-
-
-class Autoencoder(nn.Module):
-    def __init__(self, latent_dims):
-        super(Autoencoder, self).__init__()
-        self.encoder = Encoder(latent_dims)
-        self.decoder = Decoder(latent_dims)
-
-    def forward(self, x):
-        z = self.encoder(x)
-        return self.decoder(z)
 
     
 class VariationalEncoder(nn.Module):
@@ -65,10 +44,10 @@ class VariationalEncoder(nn.Module):
         self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1, bias=False)
         self.conv3 = nn.Conv2d(64, 128, kernel_size=3, padding=1, bias=False)
         self.conv4 = nn.Conv2d(128, 256, kernel_size=3, padding=1, bias=False)
-        self.conv1x1 = nn.Conv2d(256, 1, kernel_size=1, padding=1, bias=False)
+        self.conv1x1 = nn.Conv2d(256, 1, kernel_size=1, padding=0, bias=False)
 
-        self.linear1 = nn.Linear(100, latent_dims)
-        self.linear2 = nn.Linear(100, latent_dims)
+        self.linear1 = nn.Linear(64, latent_dims)
+        self.linear2 = nn.Linear(64, latent_dims)
         self.pool = nn.MaxPool2d(2)
 
         self.N = torch.distributions.Normal(0, 1)
@@ -103,22 +82,12 @@ class VariationalAutoencoder(nn.Module):
         return self.decoder(z)
 
 
-def train(autoencoder, data, epochs=20):
-    opt = torch.optim.Adam(autoencoder.parameters())
-    for epoch in tqdm.tqdm(range(epochs)):
-        for x, y in data:
-            x = x.to(device) # GPU
-            opt.zero_grad()
-            x_hat = autoencoder(x)
-            loss = ((x - x_hat)**2).sum()
-            loss.backward()
-            opt.step()
-    return autoencoder
-
-
 def VAE_train(autoencoder, data, epochs=20):
-    opt = torch.optim.Adam(autoencoder.parameters())
-    for epoch in tqdm.tqdm(range(epochs)):
+    opt = torch.optim.Adam(autoencoder.parameters(), lr=0.01)
+    pbar = tqdm.tqdm(range(epochs))
+    autoencoder.train()
+    for epoch in pbar:
+        losses = []
         for x, y in data:
             x = x.to(device) # GPU
             opt.zero_grad()
@@ -126,6 +95,9 @@ def VAE_train(autoencoder, data, epochs=20):
             loss = ((x - x_hat)**2).sum() + autoencoder.encoder.kl
             loss.backward()
             opt.step()
+            losses.append(loss.cpu().item())
+            pbar.set_description('Loss: ' + str(loss.mean().item()))
+        print("Epoch loss: ", sum(losses) / len(losses))
     return autoencoder
 
 
@@ -194,12 +166,13 @@ def main():
     data = torch.utils.data.DataLoader(
             torchvision.datasets.CelebA('./data',
                 transform=transform,
+                target_type='identity',
                 download=False),
-            batch_size=128,
+            batch_size=256,
             shuffle=True)
 
     vae = VariationalAutoencoder(latent_dims).to(device) # GPU
-    vae = VAE_train(vae, data)
+    vae = VAE_train(vae, data, epochs=5)
 
     x, y = next(iter(data)) # hack to grab a batch
     x_1 = x[y == 3][0].to(device) # find a 1
